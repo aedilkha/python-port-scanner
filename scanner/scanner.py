@@ -18,6 +18,7 @@ from datetime import datetime
 
 from tcp_connect import tcp_connect_scan
 from utils import parse_ports, resolve_target
+from output import save_results
 
 
 def service_name(port: int) -> str:
@@ -40,6 +41,8 @@ def main() -> None:
                         help="max wait per port in seconds (default: 1.0)")
     parser.add_argument("--threads", type=int, default=100,
                         help="how many ports to scan in parallel (default: 100)")
+    parser.add_argument("--output",
+                        help="save results to a file: results.json / .csv / .txt")
     args = parser.parse_args()
 
     # resolve the target and build the port list before we start
@@ -85,6 +88,10 @@ def main() -> None:
         print(f"\n  ({closed_count} closed - host replied but nothing listening)")
     if filtered_count:
         print(f"  ({filtered_count} filtered - likely a firewall)")
+
+    if args.output:
+        save_results(args.target, results, args.output)
+        print(f"\n  Results saved to {args.output}")
 
     print("\n" + "=" * 60)
     print(f"  Done   : {datetime.now():%Y-%m-%d %H:%M:%S}")
