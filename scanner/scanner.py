@@ -19,6 +19,7 @@ from datetime import datetime
 from tcp_connect import tcp_connect_scan
 from utils import parse_ports, resolve_target
 from output import save_results
+from syn_scan import syn_scan
 
 
 def service_name(port: int) -> str:
@@ -43,6 +44,8 @@ def main() -> None:
                         help="how many ports to scan in parallel (default: 100)")
     parser.add_argument("--output",
                         help="save results to a file: results.json / .csv / .txt")
+    parser.add_argument("--type", choices=["connect", "syn"], default="connect",
+                        help="scan type: connect (default) or syn (needs sudo)")
     args = parser.parse_args()
 
     # resolve the target and build the port list before we start
@@ -63,12 +66,10 @@ def main() -> None:
     print(f"  Start  : {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 60)
 
-    results = tcp_connect_scan(
-        host=target_ip,
-        ports=ports,
-        timeout=args.timeout,
-        threads=args.threads,
-    )
+    if args.type == "syn":
+        results = syn_scan(target_ip, ports, timeout=args.timeout)
+    else:
+        results = tcp_connect_scan(target_ip, ports, timeout=args.timeout, threads=args.threads)
 
     # open ports are what we care about, so show those first
     open_ports = sorted(p for p, state in results.items() if state == "open")

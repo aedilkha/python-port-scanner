@@ -1,0 +1,8 @@
+root
+admin
+user
+test
+guest
+support
+hamilton
+kali
