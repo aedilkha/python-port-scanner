@@ -1,8 +1,10 @@
-root
 admin
+root
+ubuntu
+debian
 user
-test
-guest
-support
 hamilton
-kali
+support
+manager
+test
+jay.park@becode.org
