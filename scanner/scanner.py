@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Command-line entry point for the port scanner.
 
-Reads the arguments, runs the scan, prints the results. The actual
-scanning logic lives in tcp_connect.py and utils.py - this file just
-wires it together.
+Reads the arguments, runs the scan, prints the results. The scanning logic
+lives in the other modules - this file just wires it together.
 
+    # scan one host
     python3 scanner.py --target 192.168.20.11 --ports 1-1000
-    python3 scanner.py --target 127.0.0.1 --ports 22,80,443 --timeout 0.5
+    python3 scanner.py --target 192.168.20.11 --ports 1-1000 --type syn   # needs sudo
+    python3 scanner.py --target 192.168.20.11 --ports 53,123 --type udp
 
-Lab use only - only scan the targets you're allowed to (the project's
-192.168.20.0/24 network).
+    # discover live hosts on a subnet
+    python3 scanner.py --target 192.168.20.0/24 --discover
+
+Lab use only - only scan targets you're allowed to.
 """
 
 import argparse
@@ -17,9 +20,11 @@ import socket
 from datetime import datetime
 
 from tcp_connect import tcp_connect_scan
-from utils import parse_ports, resolve_target
-from output import save_results
 from syn_scan import syn_scan
+from udp_scan import udp_scan
+from host_discovery import discover_hosts
+from output import save_results
+from utils import parse_ports, parse_targets, resolve_target
 
 
 def service_name(port: int) -> str:
@@ -30,25 +35,28 @@ def service_name(port: int) -> str:
         return "?"
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="TCP port scanner - Red Team CTF project (authorized lab use only)."
-    )
-    parser.add_argument("--target", required=True,
-                        help="target IP or hostname, e.g. 192.168.20.11")
-    parser.add_argument("--ports", default="1-1024",
-                        help="ports to scan: '1-1000' or '22,80,443' (default: 1-1024)")
-    parser.add_argument("--timeout", type=float, default=1.0,
-                        help="max wait per port in seconds (default: 1.0)")
-    parser.add_argument("--threads", type=int, default=100,
-                        help="how many ports to scan in parallel (default: 100)")
-    parser.add_argument("--output",
-                        help="save results to a file: results.json / .csv / .txt")
-    parser.add_argument("--type", choices=["connect", "syn"], default="connect",
-                        help="scan type: connect (default) or syn (needs sudo)")
-    args = parser.parse_args()
+def run_discovery(target: str, timeout: float) -> None:
+    """Host discovery mode: list live hosts on a subnet."""
+    ips = parse_targets(target)
+    print("=" * 60)
+    print(f"  Host discovery : {target} ({len(ips)} addresses)")
+    print(f"  Start          : {datetime.now():%Y-%m-%d %H:%M:%S}")
+    print("=" * 60)
 
-    # resolve the target and build the port list before we start
+    live = discover_hosts(ips, timeout=timeout)
+
+    print()
+    if live:
+        print(f"LIVE HOSTS ({len(live)}):")
+        for ip in live:
+            print(f"  [+] {ip}")
+    else:
+        print("  No live hosts found.")
+    print("\n" + "=" * 60)
+
+
+def run_port_scan(args: argparse.Namespace) -> None:
+    """Port scan mode: scan ports on a single target."""
     try:
         target_ip = resolve_target(args.target)
     except ValueError as e:
@@ -62,33 +70,35 @@ def main() -> None:
 
     print("=" * 60)
     print(f"  Target : {args.target} ({target_ip})")
-    print(f"  Ports  : {len(ports)} to scan")
+    print(f"  Ports  : {len(ports)} to scan  ({args.type} scan)")
     print(f"  Start  : {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 60)
 
     if args.type == "syn":
         results = syn_scan(target_ip, ports, timeout=args.timeout)
+    elif args.type == "udp":
+        results = udp_scan(target_ip, ports, timeout=args.timeout)
     else:
         results = tcp_connect_scan(target_ip, ports, timeout=args.timeout, threads=args.threads)
 
-    # open ports are what we care about, so show those first
-    open_ports = sorted(p for p, state in results.items() if state == "open")
-    closed_count = sum(1 for state in results.values() if state == "closed")
-    filtered_count = sum(1 for state in results.values() if state == "filtered")
+    # "interesting" states first (open, and udp's open|filtered)
+    open_ports = sorted(p for p, s in results.items() if s in ("open", "open|filtered"))
+    closed_count = sum(1 for s in results.values() if s == "closed")
+    filtered_count = sum(1 for s in results.values() if s == "filtered")
 
     print()
+    proto = "udp" if args.type == "udp" else "tcp"
     if open_ports:
         print("OPEN PORTS:")
         for port in open_ports:
-            print(f"  [+] {port:>5}/tcp   OPEN     {service_name(port)}")
+            print(f"  [+] {port:>5}/{proto}   {results[port].upper():<14} {service_name(port)}")
     else:
         print("  No open ports found.")
 
-    # closed/filtered are usually too many to list, so just count them
     if closed_count:
-        print(f"\n  ({closed_count} closed - host replied but nothing listening)")
+        print(f"\n  ({closed_count} closed)")
     if filtered_count:
-        print(f"  ({filtered_count} filtered - likely a firewall)")
+        print(f"  ({filtered_count} filtered)")
 
     if args.output:
         save_results(args.target, results, args.output)
@@ -97,6 +107,32 @@ def main() -> None:
     print("\n" + "=" * 60)
     print(f"  Done   : {datetime.now():%Y-%m-%d %H:%M:%S}")
     print("=" * 60)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Port scanner - Red Team CTF project (authorized lab use only)."
+    )
+    parser.add_argument("--target", required=True,
+                        help="target IP/hostname, or CIDR (e.g. 192.168.20.0/24) with --discover")
+    parser.add_argument("--ports", default="1-1024",
+                        help="ports to scan: '1-1000' or '22,80,443' (default: 1-1024)")
+    parser.add_argument("--type", choices=["connect", "syn", "udp"], default="connect",
+                        help="scan type: connect (default), syn (needs sudo), udp")
+    parser.add_argument("--discover", action="store_true",
+                        help="host discovery mode: find live hosts on the target subnet")
+    parser.add_argument("--timeout", type=float, default=1.0,
+                        help="max wait per port/host in seconds (default: 1.0)")
+    parser.add_argument("--threads", type=int, default=100,
+                        help="parallel workers for connect scan (default: 100)")
+    parser.add_argument("--output",
+                        help="save results to a file: results.json / .csv / .txt")
+    args = parser.parse_args()
+
+    if args.discover:
+        run_discovery(args.target, args.timeout)
+    else:
+        run_port_scan(args)
 
 
 if __name__ == "__main__":
