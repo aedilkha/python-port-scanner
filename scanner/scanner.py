@@ -24,6 +24,7 @@ from syn_scan import syn_scan
 from udp_scan import udp_scan
 from host_discovery import discover_hosts
 from output import save_results
+from combined import combined_scan
 from utils import parse_ports, parse_targets, resolve_target
 
 
@@ -55,6 +56,56 @@ def run_discovery(target: str, timeout: float) -> None:
     print("\n" + "=" * 60)
 
 
+def _print_section(title: str, results: dict, proto: str) -> None:
+    """Print one protocol's results (open ports + counts)."""
+    open_ports = sorted(p for p, s in results.items() if s in ("open", "open|filtered"))
+    closed = sum(1 for s in results.values() if s == "closed")
+    filtered = sum(1 for s in results.values() if s == "filtered")
+
+    print(f"\n--- {title} ---")
+    if open_ports:
+        for port in open_ports:
+            print(f"  [+] {port:>5}/{proto}   {results[port].upper():<14} {service_name(port)}")
+    else:
+        print("  No open ports found.")
+    extras = []
+    if closed:
+        extras.append(f"{closed} closed")
+    if filtered:
+        extras.append(f"{filtered} filtered")
+    if extras:
+        print(f"  ({', '.join(extras)})")
+
+
+def run_combined_scan(args: argparse.Namespace, target_ip: str, ports: list[int]) -> None:
+    """All-in-one mode: best TCP method + UDP, shown as two sections."""
+    print("=" * 60)
+    print(f"  Target : {args.target} ({target_ip})")
+    print(f"  Ports  : {len(ports)} to scan  (all: TCP + UDP)")
+    print(f"  Start  : {datetime.now():%Y-%m-%d %H:%M:%S}")
+    print("=" * 60)
+
+    combo = combined_scan(target_ip, ports, timeout=args.timeout, threads=args.threads)
+    tcp_method = combo.pop("_tcp_method")
+
+    _print_section(f"TCP ({tcp_method} scan)", combo["tcp"], "tcp")
+    _print_section("UDP", combo["udp"], "udp")
+
+    if args.output:
+        # merge both into one file, tagging the protocol via port state
+        merged = {}
+        for p, s in combo["tcp"].items():
+            merged[p] = f"tcp/{s}"
+        for p, s in combo["udp"].items():
+            merged[p] = merged.get(p, "") + (f" udp/{s}" if p in merged else f"udp/{s}")
+        save_results(args.target, merged, args.output)
+        print(f"\n  Results saved to {args.output}")
+
+    print("\n" + "=" * 60)
+    print(f"  Done   : {datetime.now():%Y-%m-%d %H:%M:%S}")
+    print("=" * 60)
+
+
 def run_port_scan(args: argparse.Namespace) -> None:
     """Port scan mode: scan ports on a single target."""
     try:
@@ -66,6 +117,10 @@ def run_port_scan(args: argparse.Namespace) -> None:
     ports = parse_ports(args.ports)
     if not ports:
         print("[!] No valid ports to scan - check your --ports value.")
+        return
+
+    if args.type == "all":
+        run_combined_scan(args, target_ip, ports)
         return
 
     print("=" * 60)
@@ -117,8 +172,8 @@ def main() -> None:
                         help="target IP/hostname, or CIDR (e.g. 192.168.20.0/24) with --discover")
     parser.add_argument("--ports", default="1-1024",
                         help="ports to scan: '1-1000' or '22,80,443' (default: 1-1024)")
-    parser.add_argument("--type", choices=["connect", "syn", "udp"], default="connect",
-                        help="scan type: connect (default), syn (needs sudo), udp")
+    parser.add_argument("--type", choices=["connect", "syn", "udp", "all"], default="connect",
+                        help="scan type: connect (default), syn (needs sudo), udp, all (TCP+UDP)")
     parser.add_argument("--discover", action="store_true",
                         help="host discovery mode: find live hosts on the target subnet")
     parser.add_argument("--timeout", type=float, default=1.0,
