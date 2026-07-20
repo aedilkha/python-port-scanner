@@ -135,12 +135,21 @@ the deep *identification* (which versions, which OS, which CVEs). That's the
 honest boundary of the tool — and exactly the line between a learning project
 and a production scanner.
 
-A concrete example of that boundary showed up in the lab: through the Tailscale
-VPN, nmap saw the target's open ports but my SYN scan saw none. Tailscale routes
-traffic in userspace, which raw-socket tooling (scapy) can't observe the same
-way nmap's connect-based probing can. The connect scan worked; the SYN scan
-didn't. A real limitation, and a good reminder that the environment decides
-which technique is reliable.
+A concrete example of that boundary showed up in the lab, and it's more precise
+than I first assumed. Through the Tailscale VPN, my SYN scan reported every port
+filtered — but my connect scan AND nmap's `-sS` both correctly saw port 22 open
+on the same target through the same tunnel. So it isn't that Tailscale makes SYN
+scanning impossible (nmap does it fine); it's that my scapy-based SYN scan
+doesn't handle a userspace-VPN tunnel robustly — nmap manages interface
+selection, retransmissions and userspace routing better than my code does.
+
+I verified this the honest way: my SYN scan works correctly on a local target
+(loopback), so the implementation is sound on a normal network — the failure is
+specific to raw-packet scanning through this tunnel. The takeaway: my connect
+scan is the reliable method on this target, and the SYN scan's limit here is an
+implementation gap versus nmap, not a property of the environment. Knowing
+exactly where and why a tool breaks is more useful than a tool that works by
+accident.
 
 ---
 
