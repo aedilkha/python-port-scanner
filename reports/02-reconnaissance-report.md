@@ -43,8 +43,9 @@ Findings:
   confirmed again by a full `nmap -sS` (999 filtered, only 22 open).
 - Service: **OpenSSH 8.9p1 Ubuntu 3ubuntu0.16** (Ubuntu 22.04).
 - Host keys: ECDSA + ED25519 present.
-- `--script vuln` returned no known CVEs for this version.
-- The Blue Team web application is **not yet deployed** — no web port is open
+- `nmap --script vuln -p22` reported no vulnerabilities for the SSH service
+  (no script output under the port = nothing flagged).
+- The Blue Team web application is **not yet deployed** — no web port is open (updated on 22 July 2026)
   at this stage. The recon will need to be repeated once it goes live.
 
 ## Analysis

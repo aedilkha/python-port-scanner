@@ -11,21 +11,19 @@
 A port scanner written from scratch in Python. It maps a network and its
 services the way the reconnaissance phase of a pentest does: find live hosts,
 find open ports, and figure out each port's state. It reproduces the core
-techniques of nmap so I understand *how* they work under the hood — it's a
-learning tool, not an nmap replacement.
+techniques of nmap so I understand *how* they work under the hood — it does not replace nmap but could help understanding how nmap works.
 
 ---
 
 ## 2. How the code is organised
 
-I split the scanner into small modules, one job each, instead of one long
-script. It's easier to read, easier to test, and easier to extend (adding a new
+I split the scanner into small modules, each has one job. It's easier to read, easier to test, and easier to extend (adding a new
 scan type is just a new file).
 
 | File               | Job                                                    |
 |--------------------|--------------------------------------------------------|
 | `scanner.py`       | Command-line entry point: reads args, runs the right scan, prints and saves results |
-| `tcp_connect.py`   | TCP connect scan (the "normal" TCP scan)               |
+| `tcp_connect.py`   | TCP connect scan (the "basic" TCP scan)               |
 | `syn_scan.py`      | SYN (half-open) scan using scapy                        |
 | `udp_scan.py`      | UDP scan                                                |
 | `host_discovery.py`| Finds live hosts on a subnet                            |
@@ -33,22 +31,18 @@ scan type is just a new file).
 | `utils.py`         | Shared helpers: resolve targets, parse ports and CIDR  |
 | `output.py`        | Save results to JSON / CSV / TXT                        |
 
-The main script never does the actual scanning — it just wires the modules
-together. That separation is deliberate: the logic lives in focused files, and
-`scanner.py` stays readable.
+The main script just wires the modules together. the logic lives in focused files.
 
 ---
 
 ## 3. The scan types, and why they differ
 
-The scanner supports three real techniques. Understanding the difference is the
-whole point of the project.
+The scanner supports three real techniques.
 
 ### TCP connect scan
 Opens a full TCP connection to each port (the complete 3-way handshake). If it
 connects, the port is open; if the connection is refused, it's closed; if
-nothing answers, it's filtered. Uses only Python's `socket` module — no special
-privileges, works anywhere. This is the reliable default.
+nothing answers, it's filtered. Uses only Python's `socket` module.
 
 ### SYN scan (half-open)
 Sends only the first packet of the handshake (a SYN) and reads the reply
@@ -58,7 +52,7 @@ without ever completing the connection:
 - nothing → filtered
 
 It's faster and quieter than a connect scan because the connection is never
-finished — the service often doesn't even log it. The catch: crafting a raw SYN
+finished — the service often doesn't even log it. Crafting a raw SYN
 packet isn't something the OS does normally, so it needs **scapy** and **root**.
 
 ### UDP scan
@@ -69,7 +63,7 @@ ambiguity with UDP.
 
 ---
 
-## 4. What scapy is, and why the SYN scan needs it
+## 4. (REMINDER) What scapy is, and why the SYN scan needs it
 
 `scapy` is a Python library for building and sending network packets by hand,
 byte by byte. The difference from the normal `socket` module:
@@ -143,13 +137,11 @@ scanning impossible (nmap does it fine); it's that my scapy-based SYN scan
 doesn't handle a userspace-VPN tunnel robustly — nmap manages interface
 selection, retransmissions and userspace routing better than my code does.
 
-I verified this the honest way: my SYN scan works correctly on a local target
-(loopback), so the implementation is sound on a normal network — the failure is
-specific to raw-packet scanning through this tunnel. The takeaway: my connect
+My SYN scan works correctly on a local target
+(loopback), so the implementation works on a normal network — the failure is
+specific to raw-packet scanning through this tunnel (Tailscale). So my connect
 scan is the reliable method on this target, and the SYN scan's limit here is an
-implementation gap versus nmap, not a property of the environment. Knowing
-exactly where and why a tool breaks is more useful than a tool that works by
-accident.
+implementation gap.
 
 ---
 
