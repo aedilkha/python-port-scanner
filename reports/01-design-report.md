@@ -154,3 +154,86 @@ implementation gap.
 - TCP connect and host discovery are threaded for speed; UDP and SYN run at a
   measured pace on purpose (UDP needs longer timeouts; firing raw packets too
   fast causes false results).
+
+---
+
+## Wireshark Analysis — What Our Scan Looks Like on the Wire
+
+Before and during the port scan, traffic was captured with `tshark` on the
+`tailscale0` interface (`scan_capture.pcap`, ~1183 packets). Below are the five
+questions from the brief, answered from our own capture.
+
+### 1. Network discovery — which protocol, what pattern?
+
+Discovery uses **ICMP** (ping). The capture shows a clean request/reply pair,
+one per second:
+```
+100.95.28.3  → 192.168.20.11  ICMP  Echo (ping) request  seq=1
+192.168.20.11 → 100.95.28.3   ICMP  Echo (ping) reply    seq=1
+```
+Pattern: a steady echo-request from us, an echo-reply from the host. This simply
+confirms the host is alive before we scan its ports. Four requests, four replies,
+0% loss.
+
+### 2. What does an OPEN port look like? (TCP handshake)
+
+An open port completes the **TCP three-way handshake**. On port 22:
+```
+54494 → 22  [SYN]        (we ask: are you open?)
+22 → 54494  [SYN, ACK]   (server: yes, let's connect)
+54494 → 22  [ACK]        (handshake complete — port is OPEN)
+54494 → 22  [FIN/RST]    (we immediately tear the connection down)
+```
+Because the server answered SYN-ACK, we know port 22 is open. The same pattern
+appears on 443. Interestingly, the server even leaked its SSH banner
+(`SSH-2.0-OpenSSH_8.9p1 Ubuntu`) once the handshake completed.
+
+### 3. What does a CLOSED / FILTERED port look like? How is it different?
+
+Out of 1000 ports, 998 were **filtered**. A filtered port produces **no reply at
+all** — our SYN is sent and nothing comes back:
+```
+58586 → 2   [SYN]   (no response — silently dropped by a firewall)
+```
+This is different from a classic **closed** port, which would answer with a
+**RST** (reset). Here the firewall drops everything except 22 and 443, so the
+non-open ports are *filtered* (silence), not *closed* (RST). The only RST packets
+in the capture come from **us** tearing down our own open connections, not from
+the server.
+
+Summary of the three states on the wire:
+- **OPEN** → SYN → SYN-ACK (handshake answered)
+- **CLOSED** → SYN → RST (actively refused)
+- **FILTERED** → SYN → (nothing) (silently dropped)
+
+### 4. Can you spot the scanning pattern? What makes it recognizable?
+
+Yes — it is obvious. The capture shows a burst of SYN packets to ports
+**1, 2, 3, 4, 5, 6, 7 … 30 …** in sequence, each from a different source port,
+all within milliseconds:
+```
+58148 → 1   [SYN]
+58586 → 2   [SYN]
+58774 → 3   [SYN]
+44060 → 4   [SYN]
+...
+```
+Ports 1–20 were all hit in under 0.1 second. What makes it recognizable as
+reconnaissance:
+- **One source host** contacting **many destination ports** in a short window.
+- **Sequential / near-sequential** port order.
+- **Half-open behaviour**: connections are opened and immediately closed (SYN →
+  handshake → instant FIN/RST), never used to actually exchange data.
+- **High rate**: hundreds of connection attempts per second — no legitimate
+  client behaves this way.
+
+### 5. What defensive indicators would alert a Blue Team?
+
+- A single source IP hitting a large number of distinct ports in a short time.
+- A spike in **SYN packets** without matching established, data-carrying sessions.
+- Many connections that open and close instantly (no real payload).
+- Connection attempts to closed/unused ports (a normal user never targets port 2,
+  3, 4…).
+- ICMP echo immediately followed by a fan-out of TCP SYNs from the same host.
+
+These indicators feed directly into the Defensive Analysis report (04).
