@@ -4,3 +4,7 @@ venv/
 results.json
 *.csv
 .vscode/
+database.sqlite3
+database_v2.sqlite3
+security_v2.html
+app.js
